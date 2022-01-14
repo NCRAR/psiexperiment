@@ -8,11 +8,10 @@ from functools import partial
 import numpy as np
 from scipy import signal
 
-from atom.api import (Str, Float, Typed, Int, Property, Enum, Bool,
-                      Callable, List, Tuple, set_default)
+from atom.api import (Dict, Str, Float, Typed, Int, Property, Enum, Bool,
+                      Callable, List, Value, Tuple, set_default)
 from enaml.application import deferred_call
 from enaml.core.api import Declarative, d_
-import xarray as xr
 
 from psiaudio.calibration import FlatCalibration
 from psiaudio import pipeline
@@ -21,8 +20,8 @@ from psiaudio.util import dbi, patodb
 
 from .channel import Channel
 
-from psi.core.enaml.api import PSIContribution
 
+from psi.core.enaml.api import PSIContribution
 
 
 class Input(PSIContribution):
@@ -32,6 +31,8 @@ class Input(PSIContribution):
     source = d_(Typed(Declarative).tag(metadata=True), writable=False)
     channel = Property().tag(metadata=True)
     engine = Property().tag(metadata=True)
+    n_channels = Property().tag(metadata=True)
+    channel_labels = Property().tag(metadata=True)
 
     fs = Property().tag(metadata=True)
     dtype = Property().tag(metadata=True)
@@ -87,6 +88,12 @@ class Input(PSIContribution):
     def _get_engine(self):
         return self.channel.engine
 
+    def _get_n_channels(self):
+        return self.source.n_channels
+
+    def _get_channel_labels(self):
+        return self.source.channel_labels
+
     def configure(self):
         cb = self.configure_callback()
         self.engine.register_ai_callback(cb, self.channel.name)
@@ -130,6 +137,7 @@ class EpochInput(Input):
 
 
 class Callback(Input):
+
     function = d_(Callable())
 
     def _default_name(self):
@@ -143,15 +151,18 @@ class Callback(Input):
         return True
 
 
+################################################################################
+# Continuous input types
+################################################################################
 @coroutine
 def transform(function, target):
     while True:
         data = (yield)
-        transformed_data = function(data)
-        target(transformed_data)
+        target(function(data))
 
 
 class Transform(ContinuousInput):
+
     function = d_(Callable())
 
     def configure_callback(self):
@@ -169,9 +180,6 @@ class Coroutine(Input):
         return self.coroutine(*self.args, cb).send
 
 
-################################################################################
-# Continuous input types
-################################################################################
 class CalibratedInput(Transform):
     '''
     Applies calibration to input
@@ -189,6 +197,84 @@ class CalibratedInput(Transform):
         # Input is now calibrated, and no additional transforms need to be
         # performed by downstream inputs.
         return FlatCalibration(sensitivity=0)
+
+
+@coroutine
+def mc_reference(matrix, target):
+    while True:
+        data = matrix @ (yield)
+        target(data)
+
+
+def create_diff_matrix(n_chan, reference, labels=None):
+    if reference == 'all':
+        matrix = np.full((n_chan, n_chan), -1/n_chan)
+        di = np.diag_indices(n_chan)
+        matrix[di] = 1 - 1/n_chan
+    elif reference == 'raw':
+        matrix = np.eye(n_chan, n_chan)
+    else:
+        if '+' in reference:
+            reference = reference.split('+')
+        elif np.isscalar(reference):
+            reference = [reference]
+
+        if labels is not None:
+            i_reference = [labels.index(r) for r in reference]
+        else:
+            i_reference = reference
+
+        matrix = np.eye(n_chan, n_chan)
+
+        for i in i_reference:
+            col = matrix[:, i].copy()
+            scale = 1 / len(i_reference)
+            col[:i] = -scale
+            col[i] -= scale
+            col[i+1:] = -scale
+            matrix[:, i] = col
+
+    return matrix
+
+
+class MCReference(ContinuousInput):
+
+    reference = d_(Enum('all', 'raw', 'FCz', 'MC1', 'MC2', 'MC1+MC2'))
+
+    def configure_callback(self):
+        cb = super().configure_callback()
+        m = create_diff_matrix(self.n_channels, self.reference,
+                               self.channel_labels)
+        return mc_reference(m, cb).send
+
+
+@coroutine
+def mc_select(channel, labels, target):
+    if isinstance(channel, int):
+        i = channel
+    elif labels is not None:
+        i = labels.index(channel)
+    else:
+        raise ValueError(f'Unsupported channel: {channel}')
+
+    while True:
+        data = (yield)
+        if data.ndim != 2:
+            raise ValueError('Input must be channel x time')
+        target(data[i])
+
+
+class MCSelect(ContinuousInput):
+
+    selected_channel = d_(Value())
+
+    def configure_callback(self):
+        cb = super().configure_callback()
+        return mc_select(self.selected_channel, self.source.channel_labels,
+                         cb).send
+
+    def _get_channel_labels(self):
+        return self.selected_channel
 
 
 class RMS(ContinuousInput):
@@ -213,7 +299,6 @@ class SPL(Transform):
         return lambda x, s=sens: db(x) + s
 
 
-
 class IIRFilter(ContinuousInput):
     # Allows user to deactivate the filter entirely during configuration if
     # desired. Ideally we could just remove it from the graph, but it seems a
@@ -228,6 +313,7 @@ class IIRFilter(ContinuousInput):
         metadata=True)
     f_highpass = d_(Float()).tag(metadata=True)
     f_lowpass = d_(Float()).tag(metadata=True)
+    wn = Property().tag(metadata=True)
 
     Wn = Property().tag(metadata=True)
 
@@ -502,35 +588,19 @@ class Delay(ContinuousInput):
 
 
 @coroutine
-def transform(function, target):
+def bitmask(bit, target):
     while True:
-        target(function((yield)))
+        data = (yield)
+        ttl = ((data >> bit) & 1).astype('bool')
+        target(ttl)
 
 
-class Transform(ContinuousInput):
+class Bitmask(Transform):
 
-    function = d_(Callable())
-
-    def configure_callback(self):
-        cb = super().configure_callback()
-        return transform(self.function, cb).send
-
-
-class SPL(Transform):
+    bit = d_(Int(0))
 
     def _default_function(self):
-        v_to_pa = dbi(self.calibration.get_sens(1000))
-        return lambda x: patodb(x / v_to_pa)
-
-
-class Coroutine(Input):
-    coroutine = d_(Callable())
-    args = d_(Tuple())
-    force_active = set_default(True)
-
-    def configure_callback(self):
-        cb = super().configure_callback()
-        return self.coroutine(*self.args, cb).send
+        return lambda x, b=self.bit: ((x >> b) & 1).astype('bool')
 
 
 ################################################################################
@@ -539,7 +609,7 @@ class Coroutine(Input):
 @coroutine
 def edges(initial_state, min_samples, fs, target):
     if min_samples < 1:
-        raise ValueError('min_samples must be greater than 1')
+        raise ValueError('min_samples must be >= 1')
     prior_samples = np.tile(initial_state, min_samples)
     t_prior = -min_samples
     while True:
@@ -565,12 +635,36 @@ def edges(initial_state, min_samples, fs, target):
 
 
 class Edges(EventInput):
+
     initial_state = d_(Int(0)).tag(metadata=True)
-    debounce = d_(Int()).tag(metadata=True)
+    debounce = d_(Int(2)).tag(metadata=True)
 
     def configure_callback(self):
         cb = super().configure_callback()
         return edges(self.initial_state, self.debounce, self.fs, cb).send
+
+
+@coroutine
+def events_to_info(trigger_edge, base_info, target):
+    while True:
+        events = (yield)
+        results = []
+        for e, ts in events:
+            if e == trigger_edge:
+                info = base_info.copy()
+                info['t0'] = ts
+                results.append(info)
+        target(results)
+
+
+class EventsToInfo(EventInput):
+
+    trigger_edge = d_(Enum('rising', 'falling'))
+    base_info = d_(Dict())
+
+    def configure_callback(self):
+        cb = super().configure_callback()
+        return events_to_info(self.trigger_edge, self.base_info, cb).send
 
 
 ################################################################################
@@ -581,6 +675,8 @@ class ExtractEpochs(EpochInput):
     added_queue = d_(Typed(deque, {}))
     removed_queue = d_(Typed(deque, {}))
 
+    #: Duration to buffer (allowing for lookback captures where we belatedly
+    #: notify the coroutine that we wish to capture an epoch).
     buffer_size = d_(Float(0)).tag(metadata=True)
 
     #: Defines the size of the epoch (if NaN, this is automatically drawn from
@@ -589,6 +685,9 @@ class ExtractEpochs(EpochInput):
 
     #: Defines the extra time period to capture beyond the epoch duration.
     poststim_time = d_(Float(0).tag(metadata=True))
+
+    #: Defines the extra time period to capture before the epoch begins
+    prestim_time = d_(Float(0).tag(metadata=True))
 
     complete = Bool(False)
 
@@ -606,11 +705,11 @@ class ExtractEpochs(EpochInput):
             raise ValueError(m)
         cb = super().configure_callback()
         return pipeline.extract_epochs(
-            self.fs, self.added_queue, self.epoch_size, self.poststim_time,
+            self.fs, self.added_queue, self.epoch_size, self.prestim_time, self.poststim_time,
             self.buffer_size, cb, self.mark_complete, self.removed_queue).send
 
     def _get_duration(self):
-        return self.epoch_size + self.poststim_time
+        return self.epoch_size + self.poststim_time + self.prestim_time
 
     # force change notification for duration
     def _observe_epoch_size(self, event):

@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from psi.controller.input import (accumulate, blocked, concatenate, coroutine,
-                                  InputData)
+                                  create_diff_matrix, InputData, mc_reference)
 
 
 @pytest.fixture
@@ -87,3 +87,37 @@ def test_slice():
     assert d[-20::2].metadata == {'t0_sample': 90, 'fs': 50}
     assert d[-20::].metadata == {'t0_sample': 90, 'fs': 100}
     assert d[-20::-2].metadata == {'t0_sample': 90, 'fs': -50}
+
+
+def test_create_diff_matrix():
+    m = create_diff_matrix(4, [1, 2, 3])
+
+    n_samples = 1000
+    t = np.arange(n_samples) / n_samples
+    s0 = np.sin(2 * np.pi * 10 * t)
+    s1 = np.zeros_like(s0)
+    s2 = np.zeros_like(s0)
+    s3 = np.zeros_like(s0)
+    noise = np.random.uniform(size=1000)
+
+    data_clean = np.vstack((s0, s1, s2, s3))
+    data_noisy = data_clean + noise
+    data_cleaned = m @ data_noisy
+    np.testing.assert_array_almost_equal(data_clean, data_cleaned)
+
+
+def test_create_diff_matrix():
+    m = create_diff_matrix(4, [1, 2, 3])
+
+    n_samples = 1000
+    t = np.arange(n_samples) / n_samples
+    s0 = np.sin(2 * np.pi * 10 * t)
+    s1 = np.zeros_like(s0)
+    s2 = np.zeros_like(s0)
+    s3 = np.zeros_like(s0)
+    noise = np.random.uniform(size=1000)
+
+    data_clean = np.vstack((s0, s1, s2, s3))
+    data_noisy = data_clean + noise
+    data_cleaned = m @ data_noisy
+    np.testing.assert_array_almost_equal(data_clean, data_cleaned)

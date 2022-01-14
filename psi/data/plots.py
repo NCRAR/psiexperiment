@@ -127,7 +127,7 @@ class EpochDataRange(BaseDataRange):
     max_duration = Float()
 
     def source_added(self, data, source):
-        n = [len(d) for d in data]
+        n = [d.shape[-1] for d in data]
         max_duration = max(n) / source.fs
         self.max_duration = max(max_duration, self.max_duration)
 
@@ -465,6 +465,10 @@ class ViewBox(PSIContribution):
         if label:
             self.parent.legend.addItem(plot, label)
 
+    def remove_plot(self, plot):
+        self.viewbox.removeItem(plot)
+        self.parent.legend.removeItem(plot)
+
     def plot(self, x, y, color='k', log_x=False, log_y=False, label=None,
              kind='line'):
         '''
@@ -543,7 +547,7 @@ class SinglePlot(BasePlot):
 class ChannelPlot(SinglePlot):
 
     downsample = Int(0)
-    decimate_mode = d_(Enum('extremes', 'mean'))
+    decimate_mode = d_(Enum('extremes', 'mean', 'none'))
 
     _cached_time = Typed(np.ndarray)
     _buffer = Typed(SignalBuffer)
@@ -579,7 +583,7 @@ class ChannelPlot(SinglePlot):
         try:
             width, _ = self.parent.viewbox.viewPixelSize()
             dt = self.source.fs**-1
-            self.downsample = round(width/dt/2)
+            self.downsample = round(width/dt)
         except Exception as e:
             pass
 
@@ -587,11 +591,15 @@ class ChannelPlot(SinglePlot):
         self._buffer.append_data(data)
         self.update()
 
+    def _y(self, data):
+        return data
+
     def update(self, event=None):
         low, high = self.parent.data_range.current_range
         data = self._buffer.get_range_filled(low, high, np.nan)
-        t = self._cached_time[:len(data)] + low
-        if self.downsample > 1:
+        t = self._cached_time[:data.shape[-1]] + low
+        data = self._y(data)
+        if self.decimate_mode != 'none' and self.downsample > 1:
             t = t[::self.downsample]
             if self.decimate_mode == 'extremes':
                 d_min, d_max = decimate_extremes(data, self.downsample)
@@ -1049,6 +1057,7 @@ class GroupedEpochFFTPlot(EpochGroupMixin, BasePlot):
             self._x = get_x_fft(self.source.fs, self.duration / self.waveform_averages)
 
     def _y(self, epoch):
+        # TODO: Add  support for multi-channel data.
         y = super()._y(epoch)
         psd = util.psd(y, self.source.fs, waveform_averages=self.waveform_averages)
         if self.apply_calibration:
@@ -1070,6 +1079,7 @@ class GroupedEpochPhasePlot(EpochGroupMixin, BasePlot):
             self._x = get_x_fft(self.source.fs, self.duration)
 
     def _y(self, epoch):
+        # TODO: Add support for multi-channel data.
         y = super()._y(epoch)
         return util.phase(y, self.source.fs, unwrap=self.unwrap)
 

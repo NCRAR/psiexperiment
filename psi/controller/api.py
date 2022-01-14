@@ -4,11 +4,11 @@ from .channel import (Channel, HardwareAIChannel, HardwareAOChannel,
 
 from .engine import Engine
 
-from .input import (Input, ContinuousInput, EventInput, EpochInput, Callback,
-                    CalibratedInput, Coroutine, RMS, IIRFilter, Blocked,
-                    Accumulate, Capture, Downsample, Decimate, Discard,
-                    Threshold, Average, Delay, Transform, Edges, ExtractEpochs,
-                    RejectEpochs, Detrend, coroutine)
+from .input import (Input, Bitmask, ContinuousInput, EventInput, EpochInput, Callback,
+                    CalibratedInput, RMS, SPL, IIRFilter, Blocked, Accumulate,
+                    Capture, Downsample, Decimate, Discard, Threshold, Average,
+                    Delay, Transform, Edges, ExtractEpochs, EventsToInfo,
+                    RejectEpochs, Detrend, MCReference, MCSelect)
 
 from .output import (Synchronized, ContinuousOutput, EpochOutput,
                      QueuedEpochOutput, SelectorQueuedEpochOutput,
@@ -16,6 +16,9 @@ from .output import (Synchronized, ContinuousOutput, EpochOutput,
 
 from .experiment_action import (ExperimentAction, ExperimentCallback,
                                 ExperimentEvent, ExperimentState)
+
+from .queue import (FIFOSignalQueue,
+                    GroupedFIFOSignalQueue, InterleavedFIFOSignalQueue)
 
 
 import enaml

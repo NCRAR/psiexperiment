@@ -164,7 +164,6 @@ def set_group_keys(container, event):
     if container.tab_grouping:
         container.tab_keys = sorted(context.unique_values(container.tab_grouping))
     if container.plot_grouping:
-        log.debug(container.plot_grouping)
         container.plot_keys = sorted(context.unique_values(list(container.plot_grouping)))
     else:
         container.plot_keys = [()]
@@ -196,10 +195,10 @@ enamldef GroupMixinManifest(BasePlotManifest): manifest:
             id = manifest.contribution.name + '.set_groups'
             handler = partial(set_group_keys, manifest.contribution)
 
-    Extension:
-        id = manifest.id + '.stacked_actions'
-        point = 'psi.controller.actions'
+    #Extension:
+    #    id = manifest.id + '.stacked_actions'
+    #    point = 'psi.controller.actions'
 
-        ExperimentAction:
-            event = 'context_initialized'
-            command = manifest.contribution.name + '.set_groups'
+    #    ExperimentAction:
+    #        event = 'context_initialized'
+    #        command = manifest.contribution.name + '.set_groups'

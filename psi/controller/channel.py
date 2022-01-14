@@ -52,6 +52,13 @@ class Channel(PSIContribution):
 
     filter_delay = d_(Float(0).tag(metadata=True))
 
+    # Number of channels in the stream. This is for multichannel input that is
+    # best processed as a group (e.g., from the Biosemi).
+    n_channels = d_(Int(1)).tag(metadata=True)
+
+    # Labels for channels
+    channel_labels = d_(List()).tag(metadata=True)
+
     def _observe_name(self, event):
         self.reference = self._default_reference()
 
@@ -111,6 +118,7 @@ class InputMixin(Declarative):
         return any(active)
 
     def add_input(self, i):
+        log.debug('Adding input %s to %s', i.name, self.name)
         if i in self.inputs:
             return
         self.inputs.append(i)
@@ -123,8 +131,10 @@ class InputMixin(Declarative):
         i.source = None
 
     def configure(self):
+        log.debug('Configuring %s', self.name)
+        log.debug('INPUTS %r', self.inputs)
         for input in self.inputs:
-            log.debug('Configuring input {}'.format(input.name))
+            log.debug('Configuring input %s', self.name)
             input.configure()
 
     def add_callback(self, cb):

@@ -1,0 +1,8 @@
+from threading import Thread
+
+from . import BiosemiEngine as _BiosemiEngine
+from . import BiosemiEEGChannels, BiosemiTriggerChannel
+
+
+enamldef BiosemiEngine(_BiosemiEngine):
+    pass

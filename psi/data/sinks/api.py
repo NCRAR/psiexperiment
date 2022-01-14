@@ -1,6 +1,7 @@
 import enaml
 
 with enaml.imports():
+
     from .display_value import DisplayValue
     from .event_log import EventLog
     from .epoch_counter import EpochCounter, GroupedEpochCounter
@@ -9,6 +10,7 @@ with enaml.imports():
     from .text_store import TextStore
     from .trial_log import TrialLog
     from .sdt_analysis import SDTAnalysis
+    from .websocket import Websocket
     from .zarr_store import ZarrStore
 
 # This allows us to change the binary backend in future updates to
