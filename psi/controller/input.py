@@ -154,20 +154,13 @@ class Callback(Input):
 ################################################################################
 # Continuous input types
 ################################################################################
-@coroutine
-def transform(function, target):
-    while True:
-        data = (yield)
-        target(function(data))
-
-
 class Transform(ContinuousInput):
 
     function = d_(Callable())
 
     def configure_callback(self):
         cb = super().configure_callback()
-        return transform(self.function, cb).send
+        return pipeline.transform(self.function, cb).send
 
 
 class Coroutine(Input):
@@ -199,44 +192,6 @@ class CalibratedInput(Transform):
         return FlatCalibration(sensitivity=0)
 
 
-@coroutine
-def mc_reference(matrix, target):
-    while True:
-        data = matrix @ (yield)
-        target(data)
-
-
-def create_diff_matrix(n_chan, reference, labels=None):
-    if reference == 'all':
-        matrix = np.full((n_chan, n_chan), -1/n_chan)
-        di = np.diag_indices(n_chan)
-        matrix[di] = 1 - 1/n_chan
-    elif reference == 'raw':
-        matrix = np.eye(n_chan, n_chan)
-    else:
-        if '+' in reference:
-            reference = reference.split('+')
-        elif np.isscalar(reference):
-            reference = [reference]
-
-        if labels is not None:
-            i_reference = [labels.index(r) for r in reference]
-        else:
-            i_reference = reference
-
-        matrix = np.eye(n_chan, n_chan)
-
-        for i in i_reference:
-            col = matrix[:, i].copy()
-            scale = 1 / len(i_reference)
-            col[:i] = -scale
-            col[i] -= scale
-            col[i+1:] = -scale
-            matrix[:, i] = col
-
-    return matrix
-
-
 class MCReference(ContinuousInput):
 
     reference = d_(Enum('all', 'raw', 'FCz', 'MC1', 'MC2', 'MC1+MC2'))
@@ -246,22 +201,6 @@ class MCReference(ContinuousInput):
         m = create_diff_matrix(self.n_channels, self.reference,
                                self.channel_labels)
         return mc_reference(m, cb).send
-
-
-@coroutine
-def mc_select(channel, labels, target):
-    if isinstance(channel, int):
-        i = channel
-    elif labels is not None:
-        i = labels.index(channel)
-    else:
-        raise ValueError(f'Unsupported channel: {channel}')
-
-    while True:
-        data = (yield)
-        if data.ndim != 2:
-            raise ValueError('Input must be channel x time')
-        target(data[i])
 
 
 class MCSelect(ContinuousInput):
@@ -348,29 +287,6 @@ class Blocked(ContinuousInput):
         return pipeline.blocked(block_size, cb).send
 
 
-@coroutine
-def accumulate(n, axis, newaxis, status_cb, target):
-    data = []
-    while True:
-        d = (yield)
-        if d is Ellipsis:
-            data = []
-            target(d)
-            continue
-
-        if newaxis:
-            data.append(d[np.newaxis])
-        else:
-            data.append(d)
-        if len(data) == n:
-            data = concatenate(data, axis=axis)
-            target(data)
-            data = []
-
-        if status_cb is not None:
-            status_cb(len(data))
-
-
 class Accumulate(ContinuousInput):
     '''
     Chunk data based on number of calls
@@ -383,46 +299,8 @@ class Accumulate(ContinuousInput):
 
     def configure_callback(self):
         cb = super().configure_callback()
-        return accumulate(self.n, self.axis, self.newaxis, self.status_cb,
-                          cb).send
-
-
-@coroutine
-def capture(fs, queue, target):
-    s0 = 0
-    t_start = None  # Time, in seconds, of capture start
-    s_next = None  # Sample number for capture
-
-    while True:
-        # Wait for new data to come in
-        data = (yield)
-        try:
-            # We've recieved a new command. The command will either be None
-            # (i.e., no more acquisition for a bit) or a floating-point value
-            # (indicating when next acquisition should begin).
-            info = queue.popleft()
-            if info is not None:
-                t_start = info['t0']
-                s_next = round(t_start * fs)
-                target(Ellipsis)
-                log.error('Starting capture at %f', t_start)
-            elif info is None:
-                log.debug('Ending capture')
-                s_next = None
-            else:
-                raise ValueError('Unsupported queue input %r', info)
-        except IndexError:
-            pass
-
-        if (s_next is not None) and (s_next >= s0):
-            i = s_next - s0
-            if i < data.shape[-1]:
-                d = data[i:]
-                d.metadata['capture'] = t_start
-                target(d)
-                s_next += d.shape[-1]
-
-        s0 += data.shape[-1]
+        return pipeline.accumulate(self.n, self.axis, self.newaxis,
+                                   self.status_cb, cb).send
 
 
 class Capture(ContinuousInput):
@@ -437,22 +315,7 @@ class Capture(ContinuousInput):
 
     def configure_callback(self):
         cb = super().configure_callback()
-        return capture(self.fs, self.queue, cb).send
-
-
-@coroutine
-def downsample(q, target):
-    y_remainder = np.array([])
-    while True:
-        y = np.r_[y_remainder, (yield)]
-        remainder = len(y) % q
-        if remainder != 0:
-            y, y_remainder = y[:-remainder], y[-remainder:]
-        else:
-            y_remainder = np.array([])
-        result = y[::q]
-        if len(result):
-            target(result)
+        return pipeline.capture(self.fs, self.queue, cb).send
 
 
 class Downsample(ContinuousInput):
@@ -463,27 +326,7 @@ class Downsample(ContinuousInput):
 
     def configure_callback(self):
         cb = super().configure_callback()
-        return downsample(self.q, cb).send
-
-
-@coroutine
-def decimate(q, target):
-    b, a = signal.cheby1(4, 0.05, 0.8 / q)
-    if np.any(np.abs(np.roots(a)) > 1):
-        raise ValueError('Unstable filter coefficients')
-    zf = signal.lfilter_zi(b, a)
-    y_remainder = np.array([])
-    while True:
-        y = np.r_[y_remainder, (yield)]
-        remainder = len(y) % q
-        if remainder != 0:
-            y, y_remainder = y[:-remainder], y[-remainder:]
-        else:
-            y_remainder = np.array([])
-        y, zf = signal.lfilter(b, a, y, zi=zf)
-        result = y[::q]
-        if len(result):
-            target(result)
+        return pipeline.downsample(self.q, cb).send
 
 
 class Decimate(ContinuousInput):
@@ -494,29 +337,7 @@ class Decimate(ContinuousInput):
 
     def configure_callback(self):
         cb = super().configure_callback()
-        return decimate(self.q, cb).send
-
-
-@coroutine
-def discard(discard_samples, cb):
-    to_discard = discard_samples
-    while True:
-        samples = (yield)
-        if samples is Ellipsis:
-            # Restart the pipeline
-            to_discard = discard_samples
-            cb(samples)
-            continue
-
-        samples.metadata['discarded'] = discard_samples
-        if to_discard == 0:
-            cb(samples)
-        elif samples.shape[-1] <= to_discard:
-            to_discard -= samples.shape[-1]
-        elif samples.shape[-1] > to_discard:
-            samples = samples[..., to_discard:]
-            to_discard = 0
-            cb(samples)
+        return pipeline.decimate(self.q, cb).send
 
 
 class Discard(ContinuousInput):
@@ -525,37 +346,15 @@ class Discard(ContinuousInput):
     def configure_callback(self):
         cb = super().configure_callback()
         samples = round(self.duration * self.fs)
-        return discard(samples, cb).send
+        return pipeline.discard(samples, cb).send
 
 
-@coroutine
-def threshold(threshold, target):
-    while True:
-        samples = (yield)
-        target(samples >= threshold)
+class Threshold(Transform):
 
-
-class Threshold(ContinuousInput):
     threshold = d_(Float(0)).tag(metadata=True)
 
-    def configure_callback(self):
-        cb = super().configure_callback()
-        return threshold(self.threshold, cb).send
-
-
-@coroutine
-def average(n, target):
-    data = (yield)
-    axis = 0
-    while True:
-        while data.shape[axis] >= n:
-            s = [Ellipsis] * data.ndim
-            s[axis] = np.s_[:block_size]
-            target(data[s].mean(axis=axis))
-            s[axis] = np.s_[block_size:]
-            data = data[s]
-        new_data = (yield)
-        data = np.concatenate((data, new_data), axis=axis)
+    def _default_function(self):
+        return lambda x, t=self.threshold: x >= t
 
 
 class Average(ContinuousInput):
@@ -564,14 +363,6 @@ class Average(ContinuousInput):
     def configure_callback(self):
         cb = super().configure_callback()
         return average(self.n, cb).send
-
-
-@coroutine
-def delay(n, target):
-    data = np.full(n, np.nan)
-    while True:
-        target(data)
-        data = (yield)
 
 
 class Delay(ContinuousInput):
@@ -584,15 +375,7 @@ class Delay(ContinuousInput):
     def configure_callback(self):
         cb = super().configure_callback()
         n = round(self.delay * self.fs)
-        return delay(n, cb).send
-
-
-@coroutine
-def bitmask(bit, target):
-    while True:
-        data = (yield)
-        ttl = ((data >> bit) & 1).astype('bool')
-        target(ttl)
+        return pipeline.delay(n, cb).send
 
 
 class Bitmask(Transform):
@@ -606,34 +389,6 @@ class Bitmask(Transform):
 ################################################################################
 # Event input types
 ################################################################################
-@coroutine
-def edges(initial_state, min_samples, fs, target):
-    if min_samples < 1:
-        raise ValueError('min_samples must be >= 1')
-    prior_samples = np.tile(initial_state, min_samples)
-    t_prior = -min_samples
-    while True:
-        # Wait for new data to become available
-        new_samples = (yield)
-        samples = np.r_[prior_samples, new_samples]
-        ts_change = np.flatnonzero(np.diff(samples, axis=-1)) + 1
-        ts_change = np.r_[ts_change, samples.shape[-1]]
-
-        events = []
-        for tlb, tub in zip(ts_change[:-1], ts_change[1:]):
-            if (tub - tlb) >= min_samples:
-                if initial_state == samples[tlb]:
-                    continue
-                edge = 'rising' if samples[tlb] == 1 else 'falling'
-                initial_state = samples[tlb]
-                ts = t_prior + tlb
-                events.append((edge, ts / fs))
-        if events:
-            target(events)
-        t_prior += new_samples.shape[-1]
-        prior_samples = samples[..., -min_samples:]
-
-
 class Edges(EventInput):
 
     initial_state = d_(Int(0)).tag(metadata=True)
@@ -641,20 +396,8 @@ class Edges(EventInput):
 
     def configure_callback(self):
         cb = super().configure_callback()
-        return edges(self.initial_state, self.debounce, self.fs, cb).send
-
-
-@coroutine
-def events_to_info(trigger_edge, base_info, target):
-    while True:
-        events = (yield)
-        results = []
-        for e, ts in events:
-            if e == trigger_edge:
-                info = base_info.copy()
-                info['t0'] = ts
-                results.append(info)
-        target(results)
+        return pipeline.edges(self.initial_state, self.debounce, self.fs,
+                              cb).send
 
 
 class EventsToInfo(EventInput):
@@ -664,7 +407,8 @@ class EventsToInfo(EventInput):
 
     def configure_callback(self):
         cb = super().configure_callback()
-        return events_to_info(self.trigger_edge, self.base_info, cb).send
+        return pipeline.events_to_info(self.trigger_edge, self.base_info,
+                                       cb).send
 
 
 ################################################################################
@@ -719,30 +463,6 @@ class ExtractEpochs(EpochInput):
         self.notify('duration', self.duration)
 
 
-@coroutine
-def reject_epochs(reject_threshold, mode, status, valid_target):
-    if mode == 'absolute value':
-        accept = lambda s: np.max(np.abs(s)) < reject_threshold
-    elif mode == 'amplitude':
-        accept = lambda s: np.ptp(s) < reject_threshold
-
-    while True:
-        epochs = (yield)
-        # Check for valid epochs and send them if there are any
-        valid = [e for e in epochs if accept(e)]
-        if len(valid):
-            valid_target(valid)
-
-        def update():
-            # Update the status. Must be wrapped in a deferred call to ensure
-            # that the update occurs on the GUI thread.
-            status.total += len(epochs)
-            status.rejects += len(epochs) - len(valid)
-            status.reject_percent = status.rejects / status.total * 100
-
-        deferred_call(update)
-
-
 class RejectEpochs(EpochInput):
     '''
     Rejects epochs whose amplitude exceeds a specified threshold.
@@ -765,8 +485,8 @@ class RejectEpochs(EpochInput):
 
     def configure_callback(self):
         valid_cb = super().configure_callback()
-        return reject_epochs(self.threshold, self.mode, self, valid_cb).send
-
+        return pipeline.reject_epochs(self.threshold, self.mode, self,
+                                      valid_cb).send
 
 
 class Detrend(EpochInput):
