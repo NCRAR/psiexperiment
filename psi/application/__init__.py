@@ -69,6 +69,9 @@ def configure_logging(level_console=None, level_file=None, filename=None,
     logging.captureWarnings(True)
     log = logging.getLogger()
 
+    fmt = '{levelname:10s}: {threadName:11s} - {name:40s}:: {message}'
+    formatter = logging.Formatter(fmt, style='{')
+
     if level_file is None and level_console is None:
         return
     elif level_file is None:
@@ -97,9 +100,6 @@ def configure_logging(level_console=None, level_file=None, filename=None,
             stream_handler.setFormatter(formatter)
             stream_handler.setLevel(level_console)
             log.addHandler(stream_handler)
-
-    fmt = '{levelname:10s}: {threadName:11s} - {name:40s}:: {message}'
-    formatter = logging.Formatter(fmt, style='{')
 
     if filename is not None and level_file is not None:
         file_handler = logging.FileHandler(filename, 'w', 'UTF-8')

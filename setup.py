@@ -23,7 +23,6 @@ extras_require = {
     'tdt': ['tdtpy'],
     'docs': ['sphinx', 'sphinx_rtd_theme', 'pygments-enaml'],
     'test': ['pytest'],
-    'bcolz-backend': ['bcolz'],
     'legacy-bcolz-backend': ['blosc'],
     'zarr-backend': ['zarr'],
     'dev': ['coloredlogs'],

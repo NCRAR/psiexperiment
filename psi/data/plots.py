@@ -968,7 +968,8 @@ class EpochGroupMixin(GroupMixin):
                 n = max(self._data_n_samples.get(key, 0), d.shape[-1])
                 self._data_n_samples[key] = n
 
-        self.last_seen_key = key
+        if epochs:
+            self.last_seen_key = key
 
         # Does at least one epoch need to be updated?
         self._check_selected_tab_count()
