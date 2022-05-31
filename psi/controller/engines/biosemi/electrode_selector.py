@@ -5,7 +5,7 @@ from atom.api import Atom, Bool, Int, List, Typed
 import numpy as np
 import pandas as pd
 
-from psi.controller.api import create_diff_matrix
+from psiaudio.util import diff_matrix
 from . import electrode_coords as coords
 
 
@@ -40,7 +40,7 @@ class ElectrodeSelector(Atom):
 
     def _update_diff_matrix(self):
         n_channels = len(self.coords)
-        self.diff_matrix = create_diff_matrix(n_channels, self.reference)
+        self.diff_matrix = diff_matrix(n_channels, self.reference)
 
 
 class BiosemiElectrodeSelector(ElectrodeSelector):

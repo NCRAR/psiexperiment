@@ -1,23 +1,26 @@
 import logging
 log = logging.getLogger(__name__)
 
-from atom.api import Int, List, observe, set_default, Typed
+from atom.api import Int, List, set_default, Typed
 
 from enaml.core.api import d_, Declarative
-from enaml.widgets.api import Container, DockItem, Form, Label, ObjectCombo
-from enaml.workbench.api import Extension
 
 import numpy as np
 
-from psi.controller.api import create_diff_matrix
 from psi.data.plots import ChannelPlot, GroupedEpochAveragePlot
 from psi.util import SignalBuffer
 
 
 class BiosemiMixin(Declarative):
 
-    selected_channel = d_(Int(0))
+    selected_channel = d_(List())
     diff_matrix = d_(Typed(np.ndarray))
+
+    def _observe_source(self, event):
+        log.error(event)
+        log.error(event)
+        log.error(event)
+        log.error(event)
 
 
 class BiosemiChannelPlot(BiosemiMixin, ChannelPlot):
@@ -25,20 +28,27 @@ class BiosemiChannelPlot(BiosemiMixin, ChannelPlot):
     decimate_mode = set_default('none')
 
     def _y(self, data):
+        if not self.selected_channel:
+            return
         if self.diff_matrix is not None:
             data = self.diff_matrix @ data
-        return data[self.selected_channel]
+        return data[self.selected_channel[0]]
 
     def _update_buffer(self, event=None):
-        self._buffer = SignalBuffer(self.source.fs,
-                                    self.parent.data_range.span*2,
-                                    n_channels=40)
+        self._buffer = SignalBuffer(
+            self.source.fs,
+            self.parent.data_range.span*2,
+            n_channels=40
+        )
 
     def _observe_selected_channel(self, event):
-        self.update()
+        if self.source is not None:
+            self.update()
+
 
     def _observe_diff_matrix(self, event):
-        self.update()
+        if self.source is not None:
+            self.update()
 
 
 class BiosemiEpochPlot(BiosemiMixin, GroupedEpochAveragePlot):
@@ -47,14 +57,14 @@ class BiosemiEpochPlot(BiosemiMixin, GroupedEpochAveragePlot):
     pen_width = set_default(2)
 
     def _epochs_acquired(self, epochs):
-        with self.lock:
-            self.epochs.extend(epochs)
-            super()._epochs_acquired(epochs)
+        #with self.lock:
+        self.epochs.extend(epochs)
+        super()._epochs_acquired(epochs)
 
     def _observe_plot_grouping(self, event):
-        with self.lock:
-            self._reset_plots()
-            super()._epochs_acquired(self.epochs)
+        #with self.lock:
+        self._reset_plots()
+        super()._epochs_acquired(self.epochs)
 
     def _y(self, epoch):
         result = np.mean(epoch, axis=0) if len(epoch) \

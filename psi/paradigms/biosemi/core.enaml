@@ -1,22 +1,19 @@
 import logging
 log = logging.getLogger(__name__)
 
-from functools import partial
 import threading
 
 from atom.api import Value
-from enaml.application import timed_call
 from enaml.workbench.api import Extension
 from enaml.workbench.core.api import Command
 import numpy as np
 
 from psiaudio.pipeline import coroutine
 
-from psi.context.api import ContextGroup, Parameter
-from psi.controller.api import (Callback, ControllerPlugin, ControllerManifest,
-                                Edges, ExperimentAction, EventInput,
-                                ExtractEpochs, Input, IIRFilter, MCReference,
-                                MCSelect, Threshold)
+from psi.context.api import ContextGroup, ContextRow, Parameter
+from psi.controller.api import (ControllerPlugin, ControllerManifest, Edges,
+                                ExperimentAction, ExtractEpochs, Input,
+                                IIRFilter, MCSelect, Threshold)
 from psi.core.enaml.api import PSIDockItem
 
 from psi.controller.engines.biosemi.electrode_selector import BiosemiElectrodeSelector
@@ -27,8 +24,7 @@ from psi.controller.engines.biosemi.plots import BiosemiChannelPlot, BiosemiEpoc
 from psi.experiment.api import Preferences
 
 from psi.data.sinks.api import Websocket
-from psi.data.plots import (ChannelPlot, EpochTimeContainer,
-                            TimeContainer, ViewBox, MCMixin)
+from psi.data.plots import EpochTimeContainer, TimeContainer, ViewBox
 
 
 EXPERIMENT = 'biosemi_visualization'
@@ -36,7 +32,6 @@ EXPERIMENT = 'biosemi_visualization'
 
 BUTTONS = {
     'syllable': 'Syllable',
-    'is_response': 'Response target vs. everything',
     'is_target': 'Target vs. nontarget',
     'is_correct': 'Correct vs. incorrect',
 }
@@ -59,7 +54,7 @@ def configure_experiment(event):
     controller.websocket = data.find_sink('websocket')
 
 
-class BiosemiPlugin(ControllerPlugin):
+class BiosemiVisualizationPlugin(ControllerPlugin):
 
     lock = Value()
     websocket = Value()
@@ -97,7 +92,7 @@ class BiosemiPlugin(ControllerPlugin):
             reaction_time = np.nan
             button_pressed = False
 
-        is_correct = button_pressed if md['is_response'] else not button_pressed
+        is_correct = button_pressed if md['is_target'] else not button_pressed
         md.update({
             'response_ts': self.button_press_time,
             'reaction_time': reaction_time,
@@ -151,10 +146,11 @@ class BiosemiPlugin(ControllerPlugin):
             log.info('Setting trigger time %r', self.trigger_time)
 
 
-enamldef BiosemiVisualization(ControllerManifest): manifest:
+enamldef BiosemiVisualizationManifest(ControllerManifest): manifest:
 
-    factory = BiosemiPlugin
-    attr selector = BiosemiElectrodeSelector(n_channels=32, include_exg=True)
+    factory = BiosemiVisualizationPlugin
+
+    attr selector = BiosemiElectrodeSelector(n_channels=mc_eeg.n_channels, include_exg=True)
 
     Extension:
         id = EXPERIMENT + '.workspace'
@@ -199,7 +195,7 @@ enamldef BiosemiVisualization(ControllerManifest): manifest:
 
         ContextGroup:
             name = 'settings'
-            label = 'Settings'
+            label = 'General'
 
             Parameter:
                 name = 'epoch_size'
@@ -211,15 +207,17 @@ enamldef BiosemiVisualization(ControllerManifest): manifest:
                 label = 'Prestim baseline (s)'
                 default = 0.2
 
-            Parameter:
-                name = 'highpass_filter'
-                label = 'Highpass filter (Hz)'
-                default = 10
+            ContextRow:
+                name = 'filter'
+                fmt = ['Filter from', low, 'to', high, 'Hz']
 
-            Parameter:
-                name = 'lowpass_filter'
-                label = 'Lowpass filter (Hz)'
-                default = 100
+                Parameter: low:
+                    name = 'highpass_filter'
+                    default = 10
+
+                Parameter: high:
+                    name = 'lowpass_filter'
+                    default = 100
 
     Extension:
         id = EXPERIMENT + '.io'
@@ -253,7 +251,7 @@ enamldef BiosemiVisualization(ControllerManifest): manifest:
                     name = 'trigger'
                     force_active = True
 
-        Input:
+        Input: mc_eeg:
             name = 'mc_eeg'
             source_name = 'hw_ai::biosemi_eeg'
 
@@ -313,10 +311,8 @@ enamldef BiosemiVisualization(ControllerManifest): manifest:
                     epoch_plot.plot_grouping = ['stim_index']
                 elif current_button == 'is_target':
                     epoch_plot.plot_grouping = ['is_target']
-                elif current_button == 'is_response':
-                    epoch_plot.plot_grouping = ['is_response']
                 elif current_button == 'is_correct':
-                    epoch_plot.plot_grouping = ['is_response', 'is_correct']
+                    epoch_plot.plot_grouping = ['is_target', 'is_correct']
 
             ViewBox:
                 name = 'epoch_eeg_view'
@@ -331,14 +327,12 @@ enamldef BiosemiVisualization(ControllerManifest): manifest:
                     plot_grouping << ['stim_index']
                     pen_width = 2
 
-                    fmt_plot_legend => (key):
+                    fmt_plot_label => (key):
                         if self.plot_grouping == ['stim_index']:
                             return f'Stimulus {key[0]}'
                         elif self.plot_grouping == ['is_target']:
                             return 'Target' if key[0] else 'Non-target'
-                        elif self.plot_grouping == ['is_response']:
-                            return 'Response' if key[0] else 'Non-response'
-                        elif self.plot_grouping == ['is_response', 'is_correct']:
+                        elif self.plot_grouping == ['is_target', 'is_correct']:
                             choices = {
                                 (True, True): 'Correct response (target)',
                                 (True, False): 'Correct response (non-target)',
@@ -354,16 +348,13 @@ enamldef BiosemiVisualization(ControllerManifest): manifest:
         point = 'enaml.workbench.core.commands'
         Command:
             id = 'psi.controller.process_button_press'
-            handler = lambda e: e.workbench.get_plugin('psi.controller') \
-                .process_button_press(e)
+            handler = lambda e: controller.process_button_press(e)
         Command:
             id = 'psi.controller.process_trigger'
-            handler = lambda e: e.workbench.get_plugin('psi.controller') \
-                .process_trigger(e)
+            handler = lambda e: controller.process_trigger(e)
         Command:
             id = 'psi.controller.process_trial_info'
-            handler = lambda e: e.workbench.get_plugin('psi.controller') \
-                .process_trial_info(e)
+            handler = lambda e: controller.process_trial_info(e)
         Command:
             id = 'psi.controller.configure_experiment'
             handler = configure_experiment

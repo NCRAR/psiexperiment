@@ -80,11 +80,11 @@ class BiosemiSensorChannels(BaseBiosemiChannel):
 
 
 class BiosemiTriggerChannel(BaseBiosemiChannel):
-    name = 'biosemi_trigger'
+    name = set_default('biosemi_trigger')
 
 
 class BiosemiEngine(Engine):
-    name = 'biosemi'
+    name = set_default('biosemi')
 
     host_ip = Str('127.0.0.1')
     host_port = Int(8888)

@@ -12,4 +12,4 @@ enamldef IOManifest(PluginManifest): manifest:
         point = 'psi.controller.io'
 
         BiosemiEngine: biosemi:
-            eeg_channels = 32
+            eeg_channels = 64
