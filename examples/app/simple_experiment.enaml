@@ -76,16 +76,17 @@ enamldef ControllerManifest(BaseControllerManifest): manifest:
         ContextGroup:
             label = 'My variables'
 
-            ParameterRange:
-                name = 'frequency'
-                label = 'Passband'
-                default = 1
+            ContextRow:
+                name = 'passband'
+                fmt = ['From', low, 'to', high]
 
-            #ParameterRange:
-            #    name = 'frequency'
-            #    label = 'Passband'
-            #    default_low = 1
-            #    default_high = 10
+                Parameter: low:
+                    name = 'Low'
+                    default = 1
+
+                Parameter: high:
+                    name = 'High'
+                    default = 10
 
     Extension:
         id = 'simple.io'
